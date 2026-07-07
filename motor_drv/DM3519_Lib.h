@@ -1,8 +1,26 @@
+/**
+  ******************************************************************************
+  * @file    DM3519_Lib.h
+  * @brief   DM3519 Motor Driver Library - Header
+  ******************************************************************************
+  */
+
+/*
+ * File Name        : DM3519_Lib.h
+ * Description      : DM3519 motor driver library using CANDevice abstraction.
+ * Target Platform  : STM32F1/F4/F7 Series
+ * Dependencies     : can_drv.h
+ * Author           : WU Yandong(Mark)
+ * Last Updated     : 2026-07-07
+ *
+ * Team Notes:
+ * ATTENTION: Before you modify the code, make sure that you understand your code and modified function
+ */
+
 #ifndef __DM3519_LIB_H
 #define __DM3519_LIB_H
 
 #include "can_drv.h"
-#include <string.h> // This is for memcpy function
 
 typedef enum
 {
@@ -12,28 +30,34 @@ typedef enum
 
 class DM3519{
 private:
-	CAN_HandleTypeDef* m_hcan;
+    CANDevice* m_CAN;
 
-	uint8_t  m_Error;		// Error flag
-	uint16_t m_Pos;			// Encoder
-	int16_t  m_Vel;			// Velocity
-	uint16_t m_Torque;		// Torque
-	uint8_t  m_T_MOS;		// Average MOS temperature
-	uint8_t  m_T_Rotor;    
-	float	 m_redRatio;	// Reduction Ratio
-                       
-	
 public:
-	uint8_t  m_ID;			// Controller ID
-	float	 m_SetSpeed;	// Setted target speed of output shaft (rad / s)
-	float 	 m_SetPos;		// Setted target position of output shaft (degree)
 
-	DM3519(CAN_HandleTypeDef* hcan, uint16_t ID);
+    uint16_t   m_ID;          // Motor ID
+    float     m_redRatio;     // Reduction Ratio (default 3591/187)
 
-	uint8_t ParseFeedback(CanMsg* RxMsg);
-	uint8_t SetMotorState(MotorState State);
-	uint8_t SpeedMode(float target_rads);
-	uint8_t PosSpeedMode(float Pos, float Speed);
+    // ========== Feedback ==========
+    uint8_t  m_Error;         // Error flag
+    uint16_t m_Pos;           // Encoder position
+    int16_t  m_Vel;           // Velocity
+    uint16_t m_Torque;        // Torque current
+    uint8_t  m_T_MOS;         // Average MOS temperature
+    uint8_t  m_T_Rotor;       // Rotor temperature
+
+    // ========== Target ==========
+    float    m_SetSpeed;      // Target speed of output shaft (rad/s)
+    float    m_SetPos;        // Target position of output shaft (degree)
+
+    DM3519(CANDevice* can, uint16_t ID);
+
+    // ========== Feedback ==========
+    uint8_t ParseFeedback(CanMsg* RxMsg);
+
+    // ========== Control ==========
+    uint8_t SetMotorState(MotorState State);
+    uint8_t SpeedMode(float target_rads);
+    uint8_t PosSpeedMode(float Pos, float Speed);
 };
 
 #endif

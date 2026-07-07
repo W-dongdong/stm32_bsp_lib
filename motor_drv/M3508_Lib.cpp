@@ -1,45 +1,46 @@
-/*
+/**
+  ******************************************************************************
+  * @file    M3508_Lib.cpp
+  * @brief   M3508 Motor Driver Library - Implementation
+  ******************************************************************************
+  */
 
-  Identifier: 0x200 or 0x1FF																							  (canX)
-	---------------------			  |---->  M3508::MsgAppend(int16_t Calcu_result)									  can bus											
-	|	M3508_(1)result	|             |                                                                                      |-----	M3508_(1)	
-	|			 		|		Be Appended				                                                                     |			 		
-	|	M3508_(2)result	|	 according its offset		X = 1 or 2				                                             |-----	M3508_(2)	
-	|			 		|	  ---------------->		CanMsg Motor_GroupX	---------->	M3508::SendGroups(&hcanX, identifier)----|
-	|	M3508_(3)result	|							  	 		                             	(main.cpp)		             |----- M3508_(3)	
-	|			 		|                                                                                                    |			 		
-	|	M3508_(4)result	|                                                                                                    |-----	M3508_(4)	
-	---------------------                                                                                                	 |
-																															 | 
-	M3508::Motor_Regester  -----> (address of instance M3508)																 |
-		|----------|																										 |
-   [0]	| m_ID = 1 | <--|																							   		 | Read Message
-   [1]	| m_ID = 2 | <--|																									 |  (CanX_Msg)
-   ...	|	 ...   | <--|----- M3508::Motor_Regester[idx] <-------- idx = ID - 0x201 <-------- ID <-------- message <--------|		 |
-   [6]	| m_ID = 7 | <--|																 (0x201 ~ 0x208)							 |
-   [7]	| m_ID = 8 | <--|																					   |					 V
-		|----------|																						   |		  externed on can_drv.h
-				|______________________________________________________________________________________________|
-															  |
-															  |
-											 M3508* M3508::MsgAssign(CanMsg* msg)
-*/
+/*
+ * File Name        : M3508_Lib.cpp
+ * Description      : M3508 motor driver library using CANDevice abstraction.
+ * Target Platform  : STM32F1/F4/F7 Series
+ * Dependencies     : M3508_Lib.h
+ * Author           : WU Yandong(Mark)
+ * Last Updated     : 2026-07-07
+ *
+ * Team Notes:
+ * ATTENTION: Before you modify the code, make sure that you understand your code and modified function
+ */
+
+
 #include "M3508_Lib.h"
 
 #define	k	20.0f / 16384.0f
 
-// This group is used for identifier 0x200
-static CanMsg M3508_Group1 = {0x200, CAN_ID_STD, CAN_RTR_DATA, 8, {0}};
-// This group is used for identifier 0x1FF
-static CanMsg M3508_Group2 = {0x1FF, CAN_ID_STD, CAN_RTR_DATA, 8, {0}};
+// Tx buffers per bus (0x200: motors 1-4, 0x1FF: motors 5-8)
+static CanMsg TxGroup1[CANDevice::MAX_INSTANCES] = {
+	{0x200, CAN_ID_STD, CAN_RTR_DATA, 8, {0}},
+	{0x200, CAN_ID_STD, CAN_RTR_DATA, 8, {0}},
+	{0x200, CAN_ID_STD, CAN_RTR_DATA, 8, {0}},
+};
+static CanMsg TxGroup2[CANDevice::MAX_INSTANCES] = {
+	{0x1FF, CAN_ID_STD, CAN_RTR_DATA, 8, {0}},
+	{0x1FF, CAN_ID_STD, CAN_RTR_DATA, 8, {0}},
+	{0x1FF, CAN_ID_STD, CAN_RTR_DATA, 8, {0}},
+};
 
-// Regester of motor
-M3508* M3508::Motor_Regester[8] = {NULL};
+// 2D register: [bus_index][motor_ID-1]
+M3508* M3508::MotorRegester[CANDevice::MAX_INSTANCES][MAX_MOTOR_PER_BUS] = {};
 
-M3508::M3508(CAN_HandleTypeDef* hcan, uint8_t ID)
+M3508::M3508(CANDevice* can, uint8_t ID)
     : m_cascade_frq(3),
-	  m_hcan(hcan),
-      m_ID(ID),          
+	  m_CAN(can),
+      m_ID(ID),
 	  m_redRatio(3591.0f/187.0f),
 	  m_encoder_offset(-1), // -1 is a sentinel value
       m_Encoder(0),
@@ -54,14 +55,29 @@ M3508::M3508(CAN_HandleTypeDef* hcan, uint8_t ID)
       m_speed_pid(0.7, 0.01, 0.1, 2000.0f, 15000.0f),
       m_pos_pid(20, 0, 5, 1500.0f, 2000.0f),
 	  m_StiffnessRate(0),
-	  m_RecoveryLimit(0)
+	  m_RecoveryLimit(0),
+	  m_Torque{0.3f, 0},
+	  m_MIT{0, 0, 0, 0, 0},
+	  m_RxFlag(0)
 {
-	if (m_ID >= 1 && m_ID <= 8) 
+	if (can == NULL) return;
+
+	// Clear receive buffer
+	m_RxMsg.ID   = 0;
+	m_RxMsg.IDE  = 0;
+	m_RxMsg.RTR  = 0;
+	m_RxMsg.DLC  = 0;
+	for (uint8_t i = 0; i < 8; i++){
+		m_RxMsg.Data[i] = 0;
+	}
+
+	uint8_t bus_idx = can->m_bus_idx;
+	if (bus_idx < CANDevice::MAX_INSTANCES && m_ID >= 1 && m_ID <= MAX_MOTOR_PER_BUS)
 	{
-        Motor_Regester[m_ID - 1] = this;// Save address of motor according to its m_ID
+        MotorRegester[bus_idx][m_ID - 1] = this;
     }
 }
-	
+
 /**
   * @brief  Initialize parameters of position PID and speed PID
   * @param  Pos_Loop: Position loop PID parameters
@@ -85,6 +101,29 @@ void M3508::ActiveRecovery_Config(float stiffnessRate, float recoveryLimit)
 	m_RecoveryLimit = recoveryLimit;
 }
 
+void M3508::TorqueConstant_Config(float Kt)
+{
+	if(Kt > 0.0f){
+		m_Torque.Kt = Kt;
+	}
+}
+
+void M3508::TorqueMode(float target_torque)
+{
+	m_Torque.target = target_torque;
+	m_Mode = 3; // Torque mode
+}
+
+void M3508::MITMode(float target_angle, float target_vel, float kp, float kd, float ff)
+{
+	m_MIT.angle = target_angle;
+	m_MIT.vel   = target_vel;
+	m_MIT.kp    = kp;
+	m_MIT.kd    = kd;
+	m_MIT.ff    = ff;
+	m_Mode = 4; // MIT mode
+}
+
 /**
  * @brief Parse M3508 motor CAN feedback message
  * @param RxMsg: Pointer to received CAN message
@@ -99,14 +138,14 @@ uint8_t M3508::ParseFeedback(CanMsg *RxMsg)
 	if (RxMsg->ID < 0x201 || RxMsg->ID > 0x208){
 		return 0;
 	}
-	
+
 	m_Encoder = (RxMsg->Data[0] << 8) | RxMsg->Data[1];				// 0 ~ 8191
 	m_Vel 	  = (int16_t)((RxMsg->Data[2] << 8) | RxMsg->Data[3]);	// rmp
 	m_Temp 	  = RxMsg->Data[6];										// degree
-	
+
 	int16_t Raw_Curr = (RxMsg->Data[4] << 8) | RxMsg->Data[5];
 	m_Torque_Curr = k * Raw_Curr;									// -20 ~ 20
-	
+
 	// Self-calibration
     if (m_encoder_offset < 0) // when power on
 	{
@@ -116,17 +155,17 @@ uint8_t M3508::ParseFeedback(CanMsg *RxMsg)
         m_abs_Pos        = 0;
         return 1;
     }
-	
+
 	// Record turns it rotate
 	if (m_last_encoder - m_Encoder > 4096){
 		m_turns ++;
 	}else if (m_last_encoder - m_Encoder < -4096){
 		m_turns --;
 	}
-	
+
 	m_abs_Pos = (m_turns * 8192 + m_Encoder) - m_encoder_offset;
 	m_last_encoder = m_Encoder;	// Update the encoder
-	
+
 	return 1;
 }
 
@@ -141,22 +180,22 @@ void M3508::SpeedMode(int16_t target_speed)
 int16_t M3508::SpeedModeCalculation(void)
 {
 	m_speed_pid.setMeasure(m_Vel);
-		
+
 	int16_t result = (int16_t)m_speed_pid.calculate();
-	
+
 	//Prevent overflow
 	if (result >= 16384){
 		result = 16384;
 	}else if(result <= -16384){
 		result = -16384;
 	}
-	
+
 	return result;
 }
 
 
 void M3508::PosSpeedMode(float target_Angel, uint16_t Speed_Limit)
-{	
+{
 	float target_counts = (target_Angel * m_redRatio * 8192.0f) / 360.0f;
 	m_pos_pid.setTarget(target_counts);	// Set angle target(degree, output shaft)
 	m_pos_pid.m_output_limit = Speed_Limit; // Set Speed limitation
@@ -168,10 +207,10 @@ float M3508::ActiveRecoveryCalculation(void)
     float Pos_error = m_pos_pid.m_error;
     float Vel_error = m_speed_pid.m_error;
     float coupled_error = Pos_error * Vel_error;
-    
+
     float x = coupled_error * m_StiffnessRate;
     float cubic_x = x * x * x;
-	
+
 	float result = 0;
 
 	if (m_speed_pid.m_error > 150){
@@ -180,7 +219,7 @@ float M3508::ActiveRecoveryCalculation(void)
 		result = -std::fabsf(m_RecoveryLimit * std::tanhf(cubic_x));
 	}else{
 		result = 0;
-	}    
+	}
     return result;
 }
 
@@ -188,31 +227,78 @@ float M3508::ActiveRecoveryCalculation(void)
 int16_t M3508::PosSpeedModeCalculation(void)
 {
 	m_speed_pid.setMeasure(m_Vel);
-	
-	if(m_cascade_frq == 3)
+
+	if(m_cascade_frq >= 3)
 	{
 		m_cascade_frq = 0;
 		m_pos_pid.setMeasure(m_abs_Pos);
-		
+
 		m_speed_pid.setTarget(m_pos_pid.calculate());
 	}
-	
+
 	m_cascade_frq ++;
-	
+
 	float pid_val = m_speed_pid.calculate();
 	float ActiveRecovery = ActiveRecoveryCalculation();
 	float out_val = pid_val + ActiveRecovery;
-    
+
 	// Prevent overflow
 	if (out_val > 16384.0f){
         out_val = 16384.0f;
     } else if (out_val < -16384.0f){
         out_val = -16384.0f;
     }
-	
+
 	return (int16_t)out_val;
 }
 
+
+int16_t M3508::TorqueModeCalculation(void)
+{
+	// Torque(Nm) -> Current(A) -> CAN raw value
+	// C620: -16384 ~ +16384 maps to -20A ~ +20A
+	const float SCALE = 16384.0f / 20.0f;  // 819.2 counts/A
+	float current_A = m_Torque.target / m_Torque.Kt;
+	float can_raw = current_A * SCALE;
+
+	if(can_raw > 16384.0f){
+		can_raw = 16384.0f;
+	}else if(can_raw < -16384.0f){
+		can_raw = -16384.0f;
+	}
+
+	return (int16_t)can_raw;
+}
+
+int16_t M3508::MITModeCalculation(void)
+{
+	// Target angle (deg, output shaft) -> motor shaft encoder pulses
+	float target_pulse = (m_MIT.angle * m_redRatio * 8192.0f) / 360.0f;
+	float pos_error_pulse = target_pulse - (float)m_abs_Pos;
+
+	// pos_error: motor shaft pulses -> output shaft degrees (kp unit: Nm/deg)
+	float pos_error_deg = pos_error_pulse * 360.0f / (8192.0f * m_redRatio);
+
+	// Velocity at output shaft (rpm), kd unit: Nm/rpm
+	float vel_output_shaft = (float)m_Vel / m_redRatio;
+	float vel_error = m_MIT.vel - vel_output_shaft;
+
+	// Impedance: torque = Kp * pos_err + Kd * vel_err + FF
+	float torque_Nm = m_MIT.kp * pos_error_deg + m_MIT.kd * vel_error + m_MIT.ff;
+
+	// Torque(Nm) -> Current(A) -> CAN raw value
+	const float SCALE = 16384.0f / 20.0f;
+	float current_A = torque_Nm / m_Torque.Kt;
+	float can_raw = current_A * SCALE;
+
+	if(can_raw > 16384.0f){
+		can_raw = 16384.0f;
+	}else if(can_raw < -16384.0f){
+		can_raw = -16384.0f;
+	}
+
+	return (int16_t)can_raw;
+}
 
 int16_t M3508::pid_calc(void)
 {
@@ -220,13 +306,19 @@ int16_t M3508::pid_calc(void)
 	{
 		case 0: // Sleep
 			return 0;
-		
+
 		case 1: // SpeedMode PID calculation
 			return SpeedModeCalculation();
-	
+
 		case 2: // PosSpeedMode PID calculation
 			return PosSpeedModeCalculation();
-		
+
+		case 3: // Torque mode
+			return TorqueModeCalculation();
+
+		case 4: // MIT mode (impedance)
+			return MITModeCalculation();
+
 		default:
 			break;
 	}
@@ -241,20 +333,19 @@ int16_t M3508::pid_calc(void)
 uint8_t M3508::MsgAppend(int16_t Calcu_result)
 {
 	uint8_t Offset = ((m_ID - 1) % 4) * 2;// Read C620 data sheet
-	if (m_ID > 8){
-		return 0;
-	}
-	
-	if (m_ID <= 4){
-		M3508_Group1.Data[Offset] 		= (Calcu_result >> 8) & 0xFF;
-		M3508_Group1.Data[Offset + 1] 	= Calcu_result & 0xFF;
+	uint8_t bus_idx = m_CAN->m_bus_idx;
+
+	if (m_ID >= 1 && m_ID <= 4){
+		TxGroup1[bus_idx].Data[Offset]     = (Calcu_result >> 8) & 0xFF;
+		TxGroup1[bus_idx].Data[Offset + 1] = Calcu_result & 0xFF;
 		return 1;
 	}
-	else{
-		M3508_Group2.Data[Offset] 		= (Calcu_result >> 8) & 0xFF;
-		M3508_Group2.Data[Offset + 1] 	= Calcu_result & 0xFF;
+	else if (m_ID >= 5 && m_ID <= 8){
+		TxGroup2[bus_idx].Data[Offset]     = (Calcu_result >> 8) & 0xFF;
+		TxGroup2[bus_idx].Data[Offset + 1] = Calcu_result & 0xFF;
 		return 1;
 	}
+	return 0;
 }
 
 void M3508::SetZeroPoint(void)
@@ -264,33 +355,30 @@ void M3508::SetZeroPoint(void)
 
 /**
   * @brief  Sends M3508 motor CAN frames and clears the data buffer after transmission
-  * @param  hcan: CAN handle
+  * @param  can: CANDevice instance
   * @param  identifier: CAN identifier (0x200, 0x1FF)
   * @retval 0: Invalid parameter / transmission failure
   *         1: Transmission success
   */
-uint8_t M3508::SendGroup(CAN_HandleTypeDef* hcan, uint16_t identifier)
+uint8_t M3508::SendGroup(CANDevice* can, uint16_t identifier)
 {
-	if (hcan == NULL){
+	if (can == NULL){
 		return 0;
 	}
-	
+
+	uint8_t bus_idx = can->m_bus_idx;
 	uint8_t SendState = 0;
-	
-	// If send group with 0x200 identifier
+
 	if (identifier == 0x200){
-		SendState = CAN_Send_Msg(hcan, &M3508_Group1, 5);
-		// Clear the data
-		for(uint8_t i = 0; i <8; i++){
-			M3508_Group1.Data[i] = 0;
+		SendState = can->Send_Msg(&TxGroup1[bus_idx], 5);
+		for(uint8_t i = 0; i < 8; i++){
+			TxGroup1[bus_idx].Data[i] = 0;
 		}
 	}
-	// If send group with 0x1FF identifier
 	else if (identifier == 0x1FF){
-		SendState = CAN_Send_Msg(hcan, &M3508_Group2, 5);
-		// Clear the data
-		for(uint8_t i = 0; i <8; i++){
-			M3508_Group2.Data[i] = 0;
+		SendState = can->Send_Msg(&TxGroup2[bus_idx], 5);
+		for(uint8_t i = 0; i < 8; i++){
+			TxGroup2[bus_idx].Data[i] = 0;
 		}
 	}
 	else{
@@ -301,19 +389,25 @@ uint8_t M3508::SendGroup(CAN_HandleTypeDef* hcan, uint16_t identifier)
 
 /**
  * @brief  Assigns CAN message to the corresponding M3508 motor object.
- * @param  RxMsg: Pointer to the received CAN message structure.
- * @return Pointer to the matched M3508 motor instance, or NULL if not registered/invalid.
+ * @param  can: CANDevice that received the message (reads can->m_RxMsg internally).
+ * @return Pointer to the matched M3508 instance, or NULL if not registered/invalid.
  */
-M3508* M3508::MsgAssign(CanMsg* RxMsg)
+M3508* M3508::MsgAssign(CANDevice* can)
 {
+	if (can == NULL) return NULL;
+
+	uint8_t bus_idx = can->m_bus_idx;
+	if (bus_idx >= CANDevice::MAX_INSTANCES) return NULL;
+
+	CanMsg* RxMsg = &can->m_RxMsg;
 	if (RxMsg->ID >= 0x201 && RxMsg->ID <= 0x208)
 	{
 		uint16_t idx = RxMsg->ID - 0x201;
-		if (M3508::Motor_Regester[idx] != NULL) // Check whether this position is registed
+		if (M3508::MotorRegester[bus_idx][idx] != NULL)
 		{
-			if (M3508::Motor_Regester[idx] -> ParseFeedback(RxMsg)) // OMG!!!
+			if (M3508::MotorRegester[bus_idx][idx] -> ParseFeedback(RxMsg))
 			{
-				return M3508::Motor_Regester[idx]; // return only when parsing success
+				return M3508::MotorRegester[bus_idx][idx];
 			}
 		}
 	}
@@ -322,14 +416,17 @@ M3508* M3508::MsgAssign(CanMsg* RxMsg)
 
 /**
  * @brief  Update motor control loop when a CAN message arrives.
- * @param  RxMsg: The raw CAN data from the bus.
+ * @param  can: CANDevice that received the message (reads can->m_RxMsg internally).
  * @return 1 if motor updated, 0 if ID mismatch or data error.
  */
-uint8_t M3508::ControlLoopUpdate(CanMsg* RxMsg)
+uint8_t M3508::ControlLoopUpdate(CANDevice* can)
 {
-	M3508* this_motor = M3508::MsgAssign(RxMsg); // Who get this message
-	if (this_motor != NULL) // Check whether it is valid
+	M3508* this_motor = MsgAssign(can);
+	if (this_motor != NULL)
 	{
+		this_motor->m_RxMsg  = can->m_RxMsg;
+		this_motor->m_RxFlag = 1;
+
 		this_motor -> MsgAppend(this_motor -> pid_calc());
 		return 1;
 	}
