@@ -52,9 +52,9 @@ public:
     uint16_t  m_RxLen;
     uint8_t   m_TxBuf[128];
 
+    static const uint8_t MAX_INSTANCES = 6;
     static USARTDevice *instances_[MAX_INSTANCES];
     static uint8_t    instance_count_;
-    static constexpr uint8_t MAX_INSTANCES = 6;
 
     USARTDevice(UART_HandleTypeDef *huart);
     uint8_t Send_U8(uint8_t byte, uint32_t timeout);

@@ -35,7 +35,7 @@ private:
 	int16_t PosSpeedModeCalculation(void);
 	int16_t TorqueModeCalculation(void);
 	int16_t MITModeCalculation(void);
-	static constexpr uint8_t MAX_MOTOR_PER_BUS = 8;
+	static const uint8_t MAX_MOTOR_PER_BUS = 8;
 	static M2006* MsgAssign(CANDevice* can);
 	static M2006* MotorRegester[CANDevice::MAX_INSTANCES][MAX_MOTOR_PER_BUS];
 
@@ -74,9 +74,6 @@ public:
 		float kd;		// Damping (Nm/rpm)
 		float ff;		// Feedforward torque (Nm)
 	} m_MIT;
-
-	CanMsg  m_RxMsg;		// Received message buffer (test visibility)
-	uint8_t m_RxFlag;		// RX complete flag
 
 	M2006(CANDevice* can, uint8_t ID);
 

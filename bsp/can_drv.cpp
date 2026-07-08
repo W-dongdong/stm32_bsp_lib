@@ -27,9 +27,9 @@ CANDevice *CANDevice::instances_[CANDevice::MAX_INSTANCES] = {NULL};
 uint8_t    CANDevice::instance_count_ = 0;
 
 CANDevice::CANDevice(CAN_HandleTypeDef *hcan)
-    : m_hcan(hcan)
-    , m_RxFlag(0)
+    : m_RxFlag(0)
     , m_bus_idx(0)
+    , m_hcan(hcan)
 {
 	if (m_hcan == NULL){
 		return;
@@ -47,6 +47,8 @@ CANDevice::CANDevice(CAN_HandleTypeDef *hcan)
 		m_bus_idx = instance_count_;
 		instances_[instance_count_++] = this;
 	}
+	
+	HAL_CAN_Start(m_hcan);
 }
 
 // ============================================================================

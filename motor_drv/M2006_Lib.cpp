@@ -56,18 +56,8 @@ M2006::M2006(CANDevice* can, uint8_t ID)
       m_pos_pid(20, 0, 5, 1500.0f, 2000.0f),
 	  m_Torque{0.3f, 0},
 	  m_MIT{0, 0, 0, 0, 0},
-	  m_RxFlag(0)
 {
 	if (can == NULL) return;
-
-	// Clear receive buffer
-	m_RxMsg.ID   = 0;
-	m_RxMsg.IDE  = 0;
-	m_RxMsg.RTR  = 0;
-	m_RxMsg.DLC  = 0;
-	for (uint8_t i = 0; i < 8; i++){
-		m_RxMsg.Data[i] = 0;
-	}
 
 	uint8_t bus_idx = can->m_bus_idx;
 	if (bus_idx < CANDevice::MAX_INSTANCES && m_ID >= 1 && m_ID <= MAX_MOTOR_PER_BUS)
@@ -383,9 +373,6 @@ uint8_t M2006::ControlLoopUpdate(CANDevice* can)
 	M2006* this_motor = MsgAssign(can);
 	if (this_motor != NULL)
 	{
-		this_motor->m_RxMsg  = can->m_RxMsg;
-		this_motor->m_RxFlag = 1;
-
 		this_motor -> MsgAppend(this_motor -> pid_calc());
 		return 1;
 	}

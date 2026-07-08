@@ -62,9 +62,9 @@ public:
     uint8_t   m_bus_idx;
     CAN_HandleTypeDef *m_hcan;
 
+    static const uint8_t MAX_INSTANCES = 3;
     static CANDevice *instances_[MAX_INSTANCES];
     static uint8_t    instance_count_;
-    static constexpr uint8_t MAX_INSTANCES = 3;
 
     CANDevice(CAN_HandleTypeDef *hcan);
     uint8_t Filter_Config(uint8_t FilterBank, uint32_t FilterFIFO, uint16_t ID);
