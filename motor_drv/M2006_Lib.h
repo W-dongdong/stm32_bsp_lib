@@ -33,7 +33,6 @@ private:
 
 	int16_t SpeedModeCalculation(void);
 	int16_t PosSpeedModeCalculation(void);
-	int16_t TorqueModeCalculation(void);
 	int16_t MITModeCalculation(void);
 	static const uint8_t MAX_MOTOR_PER_BUS = 8;
 	static M2006* MsgAssign(CANDevice* can);
@@ -60,11 +59,8 @@ public:
 	PID 	m_speed_pid;
 	PID 	m_pos_pid;
 
-	// ========== Torque mode ==========
-	struct {
-		float Kt;		// Torque constant (Nm/A)
-		float target;	// Target torque (Nm)
-	} m_Torque;
+	// ========== Motor params ==========
+	float m_Kt;			// Torque constant (Nm/A), default 0.3
 
 	// ========== MIT mode ==========
 	struct {
@@ -78,6 +74,7 @@ public:
 	M2006(CANDevice* can, uint8_t ID);
 
 	void 	PID_Config(const PID& Pos_Loop, const PID& Speed_Loop);
+	void	TorqueConstConfig(float Kt);
 	void	FeedForward_Config(float flexibility, float smoothness);
 	uint8_t ParseFeedback(CanMsg *RxMsg);
 	void 	SpeedMode(int16_t target_speed);
@@ -86,11 +83,8 @@ public:
 	uint8_t MsgAppend(int16_t Calcu_result);
 	void 	SetZeroPoint(void);
 
-	// MIT / Torque mode
-	void	TorqueConstant_Config(float Kt);
-	void	TorqueMode(float target_torque);
+	// MIT mode (also covers torque mode: set kp=kd=0, ff=target_torque)
 	void	MITMode(float target_angle, float target_vel, float kp, float kd, float ff);
 };
-
 
 #endif

@@ -1,18 +1,18 @@
 /**
   ******************************************************************************
-  * @file    DM4310_Lib.cpp
+  * @file    DMmotor_Lib.cpp
   * @brief   DM4310 Motor Driver Library - Implementation
   ******************************************************************************
   */
 
 /*
- * File Name        : DM4310_Lib.cpp
- * Description      : DM4310 motor driver library using CANDevice abstraction.
+ * File Name        : DMmotor_Lib.cpp
+ * Description      : DMmotor motor driver library using CANDevice abstraction.
  *                    Supports Speed / PosSpeed / MIT control modes.
  *                    Each motor owns its TxMsg -- mode functions prepare it,
  *                    SendGroup sends all motors on a bus.
  * Target Platform  : STM32F1/F4/F7 Series
- * Dependencies     : DM4310_Lib.h
+ * Dependencies     : DMmotor_Lib.h
  * Author           : WU Yandong(Mark)
  * Last Updated     : 2026-07-08
  *
@@ -21,15 +21,23 @@
  */
 
 
-#include "DM4310_Lib.h"
+#include "DMmotor_Lib.h"
 #include <string.h>
 
 
-DM4310* DM4310::MotorRegister[CANDevice::MAX_INSTANCES][MAX_MOTOR_PER_BUS] = {};
-uint8_t  DM4310::MotorCount[CANDevice::MAX_INSTANCES] = {};
+DMmotor* DMmotor::MotorRegister[CANDevice::MAX_INSTANCES][MAX_MOTOR_PER_BUS] = {};
+uint8_t  DMmotor::MotorRegester[CANDevice::MAX_INSTANCES] = {};
 
 
-int16_t DM4310::FloatToSInt(float val, float min, float max, uint8_t bits)
+/**
+  * @brief  Convert physical float value to integer code.
+  * @param  val:  Physical value.
+  * @param  min:  Minimum physical value.
+  * @param  max:  Maximum physical value.
+  * @param  bits: Number of bits of integer code.
+  * @retval Integer code in range 0 ~ (2^bits - 1).
+  */
+static uint16_t FloatToInt(float val, float min, float max, uint8_t bits)
 {
 	if (val < min) val = min;
 	if (val > max) val = max;
@@ -41,20 +49,27 @@ int16_t DM4310::FloatToSInt(float val, float min, float max, uint8_t bits)
 	if (result > (float)range) result = (float)range;
 	if (result < 0.0f)         result = 0.0f;
 
-	return (int16_t)result;                      // truncate
+	return (uint16_t)result;                     // truncate
 }
 
-float DM4310::SIntToFloat(int16_t val, float min, float max, uint8_t bits)
+
+/**
+  * @brief  Convert integer code to physical float value.
+  * @param  val:  Integer code.
+  * @param  min:  Minimum physical value.
+  * @param  max:  Maximum physical value.
+  * @param  bits: Number of bits of integer code.
+  * @retval Physical value.
+  */
+static float IntToFloat(uint16_t val, float min, float max, uint8_t bits)
 {
-	uint32_t range  = (1ul << bits) - 1;
-	int32_t  offset = (int32_t)(1ul << (bits - 1));   // int32_t avoids overflow
-	int32_t  sv     = (int32_t)val;                    // sign-extend
+	uint32_t range = (1ul << bits) - 1;
 
-	return (float)(sv + offset) / (float)range * (max - min) + min;
+	return (float)val / (float)range * (max - min) + min;
 }
 
 
-DM4310::DM4310(CANDevice* can, uint8_t ID, uint8_t MST_ID)
+DMmotor::DMmotor(CANDevice* can, uint8_t ID, uint8_t MST_ID)
 	: m_CAN(can)
 	, m_ID(ID)
 	, m_MST_ID(MST_ID)
@@ -65,6 +80,7 @@ DM4310::DM4310(CANDevice* can, uint8_t ID, uint8_t MST_ID)
 	, m_Vel(0.0f)
 	, m_Torque(0.0f)
 	, m_T_MOS(0)
+	, m_T_Rotor(0)
 	, m_Mode(0)          /* Idle */
 	, m_PMAX(12.5f)
 	, m_VMAX(30.0f)
@@ -83,20 +99,34 @@ DM4310::DM4310(CANDevice* can, uint8_t ID, uint8_t MST_ID)
 
 	// Register on bus (creation order)
 	uint8_t bus_idx = can->m_bus_idx;
-	if (bus_idx < CANDevice::MAX_INSTANCES && MotorCount[bus_idx] < MAX_MOTOR_PER_BUS)
+	if (bus_idx < CANDevice::MAX_INSTANCES && MotorRegester[bus_idx] < MAX_MOTOR_PER_BUS)
 	{
-		m_arr_idx = MotorCount[bus_idx];
-		MotorRegister[bus_idx][MotorCount[bus_idx]++] = this;
+		m_arr_idx = MotorRegester[bus_idx];
+		MotorRegister[bus_idx][MotorRegester[bus_idx]++] = this;
 	}
 }
 
-uint8_t DM4310::SetState(uint8_t state)
+/**
+  * @brief  Set DM3519 State ENABLE or DISABLE
+  * @param  state: 1, or 0; 1 is ENABLE 0 is DISABLE
+  * @retval return 1 if success, else return 0
+  */
+uint8_t DMmotor::SetState(uint8_t state)
 {
-	m_TxMsg.ID = m_ID;
+	if (m_CAN == NULL){
+		return 0;
+	}
+
+	m_TxMsg.ID  = m_ID;
+	m_TxMsg.IDE = CAN_ID_STD;
+	m_TxMsg.RTR = CAN_RTR_DATA;
+	m_TxMsg.DLC = 8;
+
 	m_TxMsg.Data[0] = 0xff; m_TxMsg.Data[1] = 0xff;
 	m_TxMsg.Data[2] = 0xff; m_TxMsg.Data[3] = 0xff;
 	m_TxMsg.Data[4] = 0xff; m_TxMsg.Data[5] = 0xff;
 	m_TxMsg.Data[6] = 0xff;
+
 	if (state) {
 		m_TxMsg.Data[7] = 0xfc;
 		return m_CAN->SendMsg(&m_TxMsg, 5);
@@ -108,65 +138,63 @@ uint8_t DM4310::SetState(uint8_t state)
 
 
 /**
-  * @brief  Parse DM4310 motor CAN feedback message.
+  * @brief  Parse DMmotor motor CAN feedback message.
   * @param  RxMsg: Pointer to received CAN message (8 bytes)
-  * @retval 1: Parse success, 0: Parse failed (MST_ID mismatch / NULL / wrong DLC)
+  * @retval 1: Parse success, 0: Parse failed (MST_ID mismatch / motor ID mismatch / NULL / wrong DLC)
   *
-  * Feedback frame layout (8 bytes, CAN ID = motor_id):
-  *   Byte 0  [7:4] MST_ID,  [3:0] ERR
-  *   Byte 1  Motor ID
-  *   Byte 2  POS[15:8]
-  *   Byte 3  POS[7:0]           -> 16-bit signed -> linear map -> rad
-  *   Byte 4  VEL[11:4]
-  *   Byte 5  [7:4] VEL[3:0],  [3:0] T[11:8]
-  *   Byte 6  T[7:0]             -> 12-bit signed each -> linear map
-  *   Byte 7  T_MOS              -> 8-bit unsigned -> degC
+  * Feedback frame layout (8 bytes, CAN ID = MST_ID):
+  *   Byte 0  [7:4] ERR,  [3:0] Motor ID
+  *   Byte 1  POS[15:8]
+  *   Byte 2  POS[7:0]           -> 16-bit integer code -> linear map -> rad
+  *   Byte 3  VEL[11:4]
+  *   Byte 4  [7:4] VEL[3:0],  [3:0] T[11:8]
+  *   Byte 5  T[7:0]             -> 12-bit integer code -> linear map
+  *   Byte 6  T_MOS              -> 8-bit unsigned -> degC
+  *   Byte 7  T_Rotor            -> 8-bit unsigned -> degC
   */
-uint8_t DM4310::ParseFeedback(CanMsg *RxMsg)
+uint8_t DMmotor::ParseFeedback(CanMsg *RxMsg)
 {
 	if (RxMsg == NULL || RxMsg->DLC != 8){
 		return 0;
 	}
 
-	// Match by MST_ID in Data[0] bits [7:4]
-	uint8_t rx_mst_id = (RxMsg->Data[0] >> 4) & 0x0F;
-	if (rx_mst_id != m_MST_ID){
+	// Match by CAN ID. MST_ID is CAN ID.
+	if (RxMsg->ID != m_MST_ID){
 		return 0;
 	}
 
-	// --- Byte 0: [MST_ID | ERR] ---
-	m_Error = RxMsg->Data[0] & 0x0F;
+	// --- Byte 0: [ERR | ID] ---
+	m_Error = (RxMsg->Data[0] >> 4) & 0x0F;
 
-	// --- Byte 2-3: Position (16-bit signed) ---
-	int16_t raw_pos = (int16_t)(((uint16_t)RxMsg->Data[2] << 8) | RxMsg->Data[3]);
-
-	// --- Byte 4-5: Velocity (12-bit signed) ---
-	//   Data[4] = VEL[11:4],  Data[5][7:4] = VEL[3:0]
-	uint16_t u_vel = ((uint16_t)RxMsg->Data[4] << 4) | ((RxMsg->Data[5] >> 4) & 0x0F);
-	int16_t raw_vel;
-	if (u_vel & 0x800){
-		raw_vel = (int16_t)(u_vel | 0xF000);
-	} else {
-		raw_vel = (int16_t)u_vel;
+	uint8_t rx_id = RxMsg->Data[0] & 0x0F;
+	if (rx_id != m_ID){
+		return 0;
 	}
 
-	// --- Byte 5-6: Torque (12-bit signed) ---
-	//   Data[5][3:0] = T[11:8],  Data[6] = T[7:0]
-	uint16_t u_torque = ((uint16_t)(RxMsg->Data[5] & 0x0F) << 8) | RxMsg->Data[6];
-	int16_t raw_torque;
-	if (u_torque & 0x800){
-		raw_torque = (int16_t)(u_torque | 0xF000);
-	} else {
-		raw_torque = (int16_t)u_torque;
-	}
+	// --- Byte 1-2: Position (16-bit integer code) ---
+	uint16_t raw_pos = ((uint16_t)RxMsg->Data[1] << 8) |
+	                    ((uint16_t)RxMsg->Data[2]);
 
-	// --- Byte 7: MOS temperature ---
-	m_T_MOS = RxMsg->Data[7];
+	// --- Byte 3-4: Velocity (12-bit integer code) ---
+	//   Data[3] = VEL[11:4],  Data[4][7:4] = VEL[3:0]
+	uint16_t raw_vel = ((uint16_t)RxMsg->Data[3] << 4) |
+	                   ((uint16_t)RxMsg->Data[4] >> 4);
+
+	// --- Byte 4-5: Torque (12-bit integer code) ---
+	//   Data[4][3:0] = T[11:8],  Data[5] = T[7:0]
+	uint16_t raw_torque = (((uint16_t)RxMsg->Data[4] & 0x0F) << 8) |
+	                       ((uint16_t)RxMsg->Data[5]);
+
+	// --- Byte 6: MOS temperature ---
+	m_T_MOS = RxMsg->Data[6];
+
+	// --- Byte 7: Rotor temperature ---
+	m_T_Rotor = RxMsg->Data[7];
 
 	// --- Linear mapping: raw -> physical (rad, rad/s, N.m) ---
-	m_Pos    = SIntToFloat(raw_pos,    -m_PMAX, m_PMAX, 16);
-	m_Vel    = SIntToFloat(raw_vel,    -m_VMAX, m_VMAX, 12);
-	m_Torque = SIntToFloat(raw_torque, -m_TMAX, m_TMAX, 12);
+	m_Pos    = IntToFloat(raw_pos,    -m_PMAX, m_PMAX, 16);
+	m_Vel    = IntToFloat(raw_vel,    -m_VMAX, m_VMAX, 12);
+	m_Torque = IntToFloat(raw_torque, -m_TMAX, m_TMAX, 12);
 
 	return 1;
 }
@@ -180,7 +208,7 @@ uint8_t DM4310::ParseFeedback(CanMsg *RxMsg)
   *   Byte 0-3: v_des (32-bit IEEE 754 float, rad/s)
   *   Byte 4-7: 0
   */
-void DM4310::SpeedMode(float speed)
+void DMmotor::SpeedMode(float speed)
 {
 	m_Mode = 1;
 
@@ -206,7 +234,7 @@ void DM4310::SpeedMode(float speed)
   *   Byte 0-3: p_des (32-bit IEEE 754 float, little-endian)
   *   Byte 4-7: v_des (32-bit IEEE 754 float, little-endian)
   */
-void DM4310::PosSpeedMode(float pos, float speed_limit)
+void DMmotor::PosSpeedMode(float pos, float speed_limit)
 {
 	m_Mode = 2;
 
@@ -236,7 +264,7 @@ void DM4310::PosSpeedMode(float pos, float speed_limit)
   *   Byte 6:   Kd[3:0] << 4  |  T_ff[11:8]
   *   Byte 7:   T_ff[7:0]
   */
-void DM4310::MITMode(float pos, float vel, float kp, float kd, float ff)
+void DMmotor::MITMode(float pos, float vel, float kp, float kd, float ff)
 {
 	m_Mode = 3;
 
@@ -246,33 +274,33 @@ void DM4310::MITMode(float pos, float vel, float kp, float kd, float ff)
 	m_TxMsg.DLC = 8;
 
 	// Bytes 0-1: p_des (16-bit unsigned, big-endian)
-	int16_t raw_pos = FloatToSInt(pos, -m_PMAX, m_PMAX, 16);
+	uint16_t raw_pos = FloatToInt(pos, -m_PMAX, m_PMAX, 16);
 	m_TxMsg.Data[0] = (raw_pos >> 8) & 0xFF;
 	m_TxMsg.Data[1] = raw_pos & 0xFF;
 
 	// v_des, Kp, Kd, T_ff: 12-bit each, nibble-packed (6 bytes for 4 values)
-	int16_t raw_vel = FloatToSInt(vel, -m_VMAX, m_VMAX, 12);
-	int16_t raw_kp  = FloatToSInt(kp, 0, 500, 12);
-	int16_t raw_kd  = FloatToSInt(kd, 0, 5, 12);
-	int16_t raw_ff  = FloatToSInt(ff, -m_TMAX, m_TMAX, 12);
+	uint16_t raw_vel = FloatToInt(vel, -m_VMAX, m_VMAX, 12);
+	uint16_t raw_kp  = FloatToInt(kp, 0.0f, 500.0f, 12);
+	uint16_t raw_kd  = FloatToInt(kd, 0.0f, 5.0f, 12);
+	uint16_t raw_ff  = FloatToInt(ff, -m_TMAX, m_TMAX, 12);
 
-	m_TxMsg.Data[2] = (raw_vel >> 4) & 0xFF;                        // v_des[11:4]
+	m_TxMsg.Data[2] = (raw_vel >> 4) & 0xFF;                            // v_des[11:4]
 	m_TxMsg.Data[3] = ((raw_vel & 0x0F) << 4) | ((raw_kp >> 8) & 0x0F); // v_des[3:0] | Kp[11:8]
-	m_TxMsg.Data[4] = raw_kp & 0xFF;                                 // Kp[7:0]
-	m_TxMsg.Data[5] = (raw_kd >> 4) & 0xFF;                         // Kd[11:4]
-	m_TxMsg.Data[6] = ((raw_kd & 0x0F) << 4) | ((raw_ff >> 8) & 0x0F); // Kd[3:0] | T_ff[11:8]
-	m_TxMsg.Data[7] = raw_ff & 0xFF;                                 // T_ff[7:0]
+	m_TxMsg.Data[4] = raw_kp & 0xFF;                                    // Kp[7:0]
+	m_TxMsg.Data[5] = (raw_kd >> 4) & 0xFF;                             // Kd[11:4]
+	m_TxMsg.Data[6] = ((raw_kd & 0x0F) << 4) | ((raw_ff >> 8) & 0x0F);  // Kd[3:0] | T_ff[11:8]
+	m_TxMsg.Data[7] = raw_ff & 0xFF;                                    // T_ff[7:0]
 }
 
 
-void DM4310::Range_Config(float PMAX, float VMAX, float TMAX)
+void DMmotor::Range_Config(float PMAX, float VMAX, float TMAX)
 {
 	if (PMAX > 0.0f) m_PMAX = PMAX;
 	if (VMAX > 0.0f) m_VMAX = VMAX;
 	if (TMAX > 0.0f) m_TMAX = TMAX;
 }
 
-uint8_t DM4310::SendControl(void)
+uint8_t DMmotor::SendControl(void)
 {
 	if (m_CAN == NULL || m_Mode == 0){
 		return 0;
@@ -289,16 +317,16 @@ uint8_t DM4310::SendControl(void)
   *
   * NOT ISR-safe (float math inside ParseFeedback).
   */
-uint8_t DM4310::ControlLoopUpdate(CANDevice* can)
+uint8_t DMmotor::ControlLoopUpdate(CANDevice* can)
 {
 	if (can == NULL) return 0;
 
 	uint8_t bus_idx = can->m_bus_idx;
 	if (bus_idx >= CANDevice::MAX_INSTANCES) return 0;
 
-	for (uint8_t i = 0; i < MotorCount[bus_idx]; i++)
+	for (uint8_t i = 0; i < MotorRegester[bus_idx]; i++)
 	{
-		DM4310* motor = MotorRegister[bus_idx][i];
+		DMmotor* motor = MotorRegister[bus_idx][i];
 		if (motor != NULL)
 		{
 			if (motor->ParseFeedback(&(can->m_RxMsg)))
@@ -318,7 +346,7 @@ uint8_t DM4310::ControlLoopUpdate(CANDevice* can)
   * Call periodically (e.g. 1 kHz timer) to keep motors active.
   * Motors in Idle mode (m_Mode == 0) are skipped.
   */
-uint8_t DM4310::SendGroup(CANDevice* can)
+uint8_t DMmotor::SendGroup(CANDevice* can)
 {
 	if (can == NULL) return 0;
 
@@ -326,9 +354,9 @@ uint8_t DM4310::SendGroup(CANDevice* can)
 	if (bus_idx >= CANDevice::MAX_INSTANCES) return 0;
 
 	uint8_t sent = 0;
-	for (uint8_t i = 0; i < MotorCount[bus_idx]; i++)
+	for (uint8_t i = 0; i < MotorRegester[bus_idx]; i++)
 	{
-		DM4310* motor = MotorRegister[bus_idx][i];
+		DMmotor* motor = MotorRegister[bus_idx][i];
 		if (motor != NULL && motor->m_Mode != 0)
 		{
 			if (motor->SendControl()){

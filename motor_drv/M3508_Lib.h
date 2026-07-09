@@ -33,7 +33,6 @@ private:
 
 	int16_t SpeedModeCalculation(void);
 	int16_t PosSpeedModeCalculation(void);
-	int16_t TorqueModeCalculation(void);
 	int16_t MITModeCalculation(void);
 	static const uint8_t MAX_MOTOR_PER_BUS = 8;
 	static M3508* MsgAssign(CANDevice* can);
@@ -64,11 +63,8 @@ public:
 	float 	m_StiffnessRate;
 	float	m_RecoveryLimit;
 
-	// ========== Torque mode ==========
-	struct {
-		float Kt;		// Torque constant (Nm/A)
-		float target;	// Target torque (Nm)
-	} m_Torque;
+	// ========== Motor params ==========
+	float m_Kt;			// Torque constant (Nm/A), default 0.3
 
 	// ========== MIT mode ==========
 	struct {
@@ -82,6 +78,7 @@ public:
 	M3508(CANDevice* can, uint8_t ID);
 
 	void 	PID_Config(const PID& Pos_Loop, const PID& Speed_Loop);
+	void	TorqueConstConfig(float Kt);
 	void	FeedForward_Config(float flexibility, float smoothness);
 	void	ActiveRecovery_Config(float stiffnessRate, float recoveryLimit);
 	uint8_t ParseFeedback(CanMsg *RxMsg);
@@ -92,11 +89,8 @@ public:
 	void 	SetZeroPoint(void);
 	float   ActiveRecoveryCalculation(void);
 
-	// MIT / Torque mode
-	void	TorqueConstant_Config(float Kt);
-	void	TorqueMode(float target_torque);
+	// MIT mode (also covers torque mode: set kp=kd=0, ff=target_torque)
 	void	MITMode(float target_angle, float target_vel, float kp, float kd, float ff);
 };
-
 
 #endif

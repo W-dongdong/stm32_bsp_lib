@@ -54,9 +54,14 @@ M2006::M2006(CANDevice* can, uint8_t ID)
 	  m_Mode(0),	/* No mode */
       m_speed_pid(0.7, 0.01, 0.1, 2000.0f, 15000.0f),
       m_pos_pid(20, 0, 5, 1500.0f, 2000.0f),
-	  m_Torque{0.3f, 0},
-	  m_MIT{0, 0, 0, 0, 0},
+	  m_Kt(0.3f)
 {
+	m_MIT.angle  = 0;
+	m_MIT.vel    = 0;
+	m_MIT.kp     = 0;
+	m_MIT.kd     = 0;
+	m_MIT.ff     = 0;
+
 	if (can == NULL) return;
 
 	uint8_t bus_idx = can->m_bus_idx;
@@ -78,22 +83,18 @@ void M2006::PID_Config(const PID& Pos_Loop, const PID& Speed_Loop)
 	m_speed_pid = Speed_Loop;
 }
 
-void M2006::FeedForward_Config(float flexibility, float smoothness)
+void M2006::TorqueConstConfig(float Kt)
 {
-	m_speed_pid.SetFeedForward(flexibility, smoothness);
-}
-
-void M2006::TorqueConstant_Config(float Kt)
-{
-	if(Kt > 0.0f){
-		m_Torque.Kt = Kt;
+	if (Kt > 0) {
+		m_Kt = Kt;
+	} else {
+		m_Kt = -Kt;
 	}
 }
 
-void M2006::TorqueMode(float target_torque)
+void M2006::FeedForward_Config(float flexibility, float smoothness)
 {
-	m_Torque.target = target_torque;
-	m_Mode = 3; // Torque mode
+	m_speed_pid.SetFeedForward(flexibility, smoothness);
 }
 
 void M2006::MITMode(float target_angle, float target_vel, float kp, float kd, float ff)
@@ -103,7 +104,7 @@ void M2006::MITMode(float target_angle, float target_vel, float kp, float kd, fl
 	m_MIT.kp    = kp;
 	m_MIT.kd    = kd;
 	m_MIT.ff    = ff;
-	m_Mode = 4; // MIT mode
+	m_Mode = 3; // MIT mode
 }
 
 /**
@@ -203,30 +204,12 @@ int16_t M2006::PosSpeedModeCalculation(void)
 }
 
 
-int16_t M2006::TorqueModeCalculation(void)
-{
-	// Torque(Nm) -> Current(A) -> CAN raw value
-	const float SCALE = 16384.0f / 20.0f;  // 819.2 counts/A
-	float current_A = m_Torque.target / m_Torque.Kt;
-	float can_raw = current_A * SCALE;
-
-	if(can_raw > 16384.0f){
-		can_raw = 16384.0f;
-	}else if(can_raw < -16384.0f){
-		can_raw = -16384.0f;
-	}
-
-	return (int16_t)can_raw;
-}
-
 int16_t M2006::MITModeCalculation(void)
 {
-	// Target angle (deg, output shaft) -> motor shaft encoder pulses
-	float target_pulse = (m_MIT.angle * m_redRatio * 8192.0f) / 360.0f;
-	float pos_error_pulse = target_pulse - (float)m_abs_Pos;
-
-	// pos_error: motor shaft pulses -> output shaft degrees (kp unit: Nm/deg)
-	float pos_error_deg = pos_error_pulse * 360.0f / (8192.0f * m_redRatio);
+	// Encoder pulses -> output shaft degrees (single conversion, no double round-trip)
+	const float PULSE_TO_DEG = 360.0f / (8192.0f * m_redRatio);
+	float pos_deg = (float)m_abs_Pos * PULSE_TO_DEG;
+	float pos_error_deg = m_MIT.angle - pos_deg;
 
 	// Velocity at output shaft (rpm), kd unit: Nm/rpm
 	float vel_output_shaft = (float)m_Vel / m_redRatio;
@@ -237,7 +220,7 @@ int16_t M2006::MITModeCalculation(void)
 
 	// Torque(Nm) -> Current(A) -> CAN raw value
 	const float SCALE = 16384.0f / 20.0f;
-	float current_A = torque_Nm / m_Torque.Kt;
+	float current_A = torque_Nm / m_Kt;
 	float can_raw = current_A * SCALE;
 
 	if(can_raw > 16384.0f){
@@ -262,10 +245,7 @@ int16_t M2006::pid_calc(void)
 		case 2: // PosSpeedMode PID calculation
 			return PosSpeedModeCalculation();
 
-		case 3: // Torque mode
-			return TorqueModeCalculation();
-
-		case 4: // MIT mode (impedance)
+		case 3: // MIT mode (impedance / torque)
 			return MITModeCalculation();
 
 		default:
@@ -319,13 +299,13 @@ uint8_t M2006::SendGroup(CANDevice* can, uint16_t identifier)
 	uint8_t SendState = 0;
 
 	if (identifier == 0x200){
-		SendState = can->Send_Msg(&TxGroup1[bus_idx], 5);
+		SendState = can->SendMsg(&TxGroup1[bus_idx], 5);
 		for(uint8_t i = 0; i < 8; i++){
 			TxGroup1[bus_idx].Data[i] = 0;
 		}
 	}
 	else if (identifier == 0x1FF){
-		SendState = can->Send_Msg(&TxGroup2[bus_idx], 5);
+		SendState = can->SendMsg(&TxGroup2[bus_idx], 5);
 		for(uint8_t i = 0; i < 8; i++){
 			TxGroup2[bus_idx].Data[i] = 0;
 		}

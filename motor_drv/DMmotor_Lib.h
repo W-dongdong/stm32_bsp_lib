@@ -1,13 +1,13 @@
 /**
   ******************************************************************************
-  * @file    DM4310_Lib.h
-  * @brief   DM4310 Motor Driver Library - Header
+  * @file    DMmotor_Lib.h
+  * @brief   DMmotor Motor Driver Library - Header
   ******************************************************************************
   */
 
 /*
- * File Name        : DM4310_Lib.h
- * Description      : DM4310 motor driver library using CANDevice abstraction.
+ * File Name        : DMmotor_Lib.h
+ * Description      : DMmotor motor driver library using CANDevice abstraction.
  *                    Supports Speed / PosSpeed / MIT control modes.
  *                    Each motor owns its TxMsg — mode functions prepare it,
  *                    SendGroup sends all motors on a bus.
@@ -20,12 +20,12 @@
  * ATTENTION: Before you modify the code, make sure that you understand your code and modified function
  */
 
-#ifndef __DM4310_LIB_H
-#define __DM4310_LIB_H
+#ifndef __DMMOTOR_LIB_H
+#define __DMMOTOR_LIB_H
 
 #include "can_drv.h"
 
-class DM4310{
+class DMmotor{
 private:
 	CANDevice* m_CAN;
 	uint8_t   m_ID;              // Motor CAN ID
@@ -35,8 +35,8 @@ private:
 
 	// Static registration per bus (creation-order array)
 	static const uint8_t MAX_MOTOR_PER_BUS = 8;
-	static DM4310* MotorRegister[CANDevice::MAX_INSTANCES][MAX_MOTOR_PER_BUS];
-	static uint8_t  MotorCount[CANDevice::MAX_INSTANCES];
+	static DMmotor* MotorRegister[CANDevice::MAX_INSTANCES][MAX_MOTOR_PER_BUS];
+	static uint8_t  MotorRegester[CANDevice::MAX_INSTANCES];
 
 	// Linear mapping helpers (Float ↔ Signed N-bit Integer)
 	static int16_t FloatToSInt(float val, float min, float max, uint8_t bits);
@@ -52,6 +52,7 @@ public:
 	float    m_Vel;              // Velocity (rad/s, motor shaft)
 	float    m_Torque;           // Torque (N·m)
 	uint8_t  m_T_MOS;            // MOS temperature (°C)
+	uint8_t  m_T_Rotor;
 
 	// ========== State ==========
 	uint8_t  m_Mode;             // 0=Idle, 1=Speed, 2=PosSpeed, 3=MIT
@@ -64,7 +65,7 @@ public:
 	float    m_KDMAX;           // Kd max        (MIT),   default 5
 	float    m_TFFMAX;          // T_ff max      (MIT),   default 2,   MIN = -TFFMAX
 
-	DM4310(CANDevice* can, uint8_t ID, uint8_t MST_ID);
+	DMmotor(CANDevice* can, uint8_t ID, uint8_t MST_ID);
 
 	// ========== Feedback ==========
 	uint8_t ParseFeedback(CanMsg *RxMsg);
