@@ -122,7 +122,7 @@ uint8_t CANDevice::Start()
   * @note   STD ID: 0x000--0x7FF (11-bit);  EXT ID: 0x000--0x1FFFFFFF (29-bit)
   * @note   IMPORTANT: Set TxMsg->DLC before calling
   */
-uint8_t CANDevice::Send_Msg(CanMsg *TxMsg, uint32_t time_out)
+uint8_t CANDevice::SendMsg(CanMsg *TxMsg, uint32_t time_out)
 {
 	CAN_TxHeaderTypeDef CAN_TxHeader;
 	uint32_t            mailbox;
@@ -179,7 +179,7 @@ uint8_t CANDevice::Send_Msg(CanMsg *TxMsg, uint32_t time_out)
   * @retval 0: Failure (null pointer, bad FIFO, no message, or HAL error)
   * @note   RxMsg is an OUTPUT parameter -- pre-call content is ignored
   */
-uint8_t CANDevice::Read_Msg(uint32_t RxFIFO, CanMsg *RxMsg)
+uint8_t CANDevice::ReadMsg(uint32_t RxFIFO, CanMsg *RxMsg)
 {
 	CAN_RxHeaderTypeDef RxHeader;
 
@@ -224,7 +224,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	for (uint8_t i = 0; i < CANDevice::MAX_INSTANCES; i++){
 		if ((CANDevice::instances_[i] != NULL) &&
 		    (CANDevice::instances_[i]->m_hcan == hcan)){
-			CANDevice::instances_[i]->Read_Msg(CAN_RX_FIFO0,
+			CANDevice::instances_[i]->ReadMsg(CAN_RX_FIFO0,
 				&(CANDevice::instances_[i]->m_RxMsg));
 			CANDevice::instances_[i]->m_RxFlag = 1;
 		}
@@ -240,7 +240,7 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	for (uint8_t i = 0; i < CANDevice::MAX_INSTANCES; i++){
 		if ((CANDevice::instances_[i] != NULL) &&
 		    (CANDevice::instances_[i]->m_hcan == hcan)){
-			CANDevice::instances_[i]->Read_Msg(CAN_RX_FIFO1,
+			CANDevice::instances_[i]->ReadMsg(CAN_RX_FIFO1,
 				&(CANDevice::instances_[i]->m_RxMsg));
 			CANDevice::instances_[i]->m_RxFlag = 1;
 		}

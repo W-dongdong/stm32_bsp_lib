@@ -45,8 +45,6 @@ private:
 public:
 	// ========== TxMsg (each motor owns its frame) ==========
 	CanMsg   m_TxMsg;            // Prepared control frame
-	CanMsg   m_RxMsg;            // Last received feedback
-	uint8_t  m_RxFlag;
 
 	// ========== Feedback ==========
 	uint8_t  m_Error;            // Error code from feedback
@@ -81,6 +79,7 @@ public:
 
 	// ========== Send ==========
 	uint8_t SendControl(void);       // Send this motor's m_TxMsg
+	uint8_t SetState(uint8_t state);
 
 	// ========== Static ==========
 	static uint8_t ControlLoopUpdate(CANDevice* can);

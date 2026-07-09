@@ -60,7 +60,6 @@ DM4310::DM4310(CANDevice* can, uint8_t ID, uint8_t MST_ID)
 	, m_MST_ID(MST_ID)
 	, m_arr_idx(0)
 	, m_redRatio(1.0f)
-	, m_RxFlag(0)
 	, m_Error(0)
 	, m_Pos(0.0f)
 	, m_Vel(0.0f)
@@ -82,21 +81,28 @@ DM4310::DM4310(CANDevice* can, uint8_t ID, uint8_t MST_ID)
 		m_TxMsg.Data[i] = 0;
 	}
 
-	// Clear RxMsg
-	m_RxMsg.ID   = 0;
-	m_RxMsg.IDE  = 0;
-	m_RxMsg.RTR  = 0;
-	m_RxMsg.DLC  = 0;
-	for (uint8_t i = 0; i < 8; i++){
-		m_RxMsg.Data[i] = 0;
-	}
-
 	// Register on bus (creation order)
 	uint8_t bus_idx = can->m_bus_idx;
 	if (bus_idx < CANDevice::MAX_INSTANCES && MotorCount[bus_idx] < MAX_MOTOR_PER_BUS)
 	{
 		m_arr_idx = MotorCount[bus_idx];
 		MotorRegister[bus_idx][MotorCount[bus_idx]++] = this;
+	}
+}
+
+uint8_t DM4310::SetState(uint8_t state)
+{
+	m_TxMsg.ID = m_ID;
+	m_TxMsg.Data[0] = 0xff; m_TxMsg.Data[1] = 0xff;
+	m_TxMsg.Data[2] = 0xff; m_TxMsg.Data[3] = 0xff;
+	m_TxMsg.Data[4] = 0xff; m_TxMsg.Data[5] = 0xff;
+	m_TxMsg.Data[6] = 0xff;
+	if (state) {
+		m_TxMsg.Data[7] = 0xfc;
+		return m_CAN->SendMsg(&m_TxMsg, 5);
+	} else {
+		m_TxMsg.Data[7] = 0xfd;
+		return m_CAN->SendMsg(&m_TxMsg, 5);
 	}
 }
 
@@ -271,7 +277,7 @@ uint8_t DM4310::SendControl(void)
 	if (m_CAN == NULL || m_Mode == 0){
 		return 0;
 	}
-	return m_CAN->Send_Msg(&m_TxMsg, 5);
+	return m_CAN->SendMsg(&m_TxMsg, 5);
 }
 
 
@@ -281,7 +287,6 @@ uint8_t DM4310::SendControl(void)
   * @param  can: CANDevice that received the message (reads can->m_RxMsg).
   * @retval 1 if a motor matched, 0 otherwise.
   *
-  * Call in main loop when can->m_RxFlag is set.
   * NOT ISR-safe (float math inside ParseFeedback).
   */
 uint8_t DM4310::ControlLoopUpdate(CANDevice* can)
@@ -291,17 +296,13 @@ uint8_t DM4310::ControlLoopUpdate(CANDevice* can)
 	uint8_t bus_idx = can->m_bus_idx;
 	if (bus_idx >= CANDevice::MAX_INSTANCES) return 0;
 
-	CanMsg* RxMsg = &can->m_RxMsg;
-
 	for (uint8_t i = 0; i < MotorCount[bus_idx]; i++)
 	{
 		DM4310* motor = MotorRegister[bus_idx][i];
 		if (motor != NULL)
 		{
-			if (motor->ParseFeedback(RxMsg))
+			if (motor->ParseFeedback(&(can->m_RxMsg)))
 			{
-				motor->m_RxMsg  = can->m_RxMsg;
-				motor->m_RxFlag = 1;
 				return 1;
 			}
 		}

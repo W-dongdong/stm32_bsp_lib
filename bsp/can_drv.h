@@ -70,8 +70,8 @@ public:
     uint8_t Filter_Config(uint8_t FilterBank, uint32_t FilterFIFO, uint16_t ID);
     uint8_t IT_Config(uint32_t ActiveITs);
     uint8_t Start();
-    uint8_t Send_Msg(CanMsg *TxMsg, uint32_t time_out);
-    uint8_t Read_Msg(uint32_t RxFIFO, CanMsg *RxMsg);
+    uint8_t SendMsg(CanMsg *TxMsg, uint32_t time_out);
+    uint8_t ReadMsg(uint32_t RxFIFO, CanMsg *RxMsg);
 };
 
 #endif /* __cplusplus */
