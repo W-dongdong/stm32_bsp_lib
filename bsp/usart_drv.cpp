@@ -112,12 +112,39 @@ uint8_t USARTDevice::DMA_Stop()
     return (HAL_UART_DMAStop(m_huart) == HAL_OK) ? 1 : 0;
 }
 
+/**
+ * @brief Start non-blocking UART DMA reception.
+ * @param usart_rx_buf Buffer to store incoming data.
+ * @param USART_RX_BUF_LEN Number of bytes to receive.
+ * @return 1 on success, 0 on failure.
+ * @note This function returns immediately. The HAL callback 
+ *       HAL_UART_RxCpltCallback will be triggered ONLY after the DMA 
+ *       has fully received the specified length of bytes.
+ */
 uint8_t USARTDevice::DMA_Start(uint8_t *usart_rx_buf, uint16_t USART_RX_BUF_LEN)
 {
     if (m_huart == NULL){
         return 0;
     }
     return (HAL_UART_Receive_DMA(m_huart, usart_rx_buf, USART_RX_BUF_LEN) == HAL_OK) ? 1 : 0;
+}
+
+/**
+ * @brief  Start non-blocking UART TX using DMA.
+ * @param  pTxBuffer Pointer to the data buffer to be transmitted.
+ * @param  send_len  Number of bytes to send.
+ * @return 1 if transmission started successfully, 0 otherwise.
+ * @note   Returns immediately. HAL_UART_TxCpltCallback is triggered 
+ *         ONLY after the DMA has finished sending the specified bytes.
+ */
+uint8_t USARTDevice::Tx_DMA(uint8_t* pTxBuffer, uint16_t send_len)
+{
+    if (m_huart == NULL) return 0;
+    if (HAL_UART_Transmit_DMA(m_huart, pTxBuffer, send_len) == HAL_OK)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 uint8_t USARTDevice::IdleRx_DMA(uint8_t *pData, uint16_t Size)

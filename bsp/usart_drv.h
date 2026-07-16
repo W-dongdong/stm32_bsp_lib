@@ -63,6 +63,7 @@ public:
     uint8_t Send_Block(uint8_t *pData, uint16_t len, uint32_t timeout);
     uint8_t Read_U8(uint8_t *pData, uint32_t timeout);
     uint8_t DMA_Start(uint8_t *usart_rx_buf, uint16_t USART_RX_BUF_LEN);
+    uint8_t Tx_DMA(uint8_t* pTxBuffer, uint16_t send_len)
     uint8_t DMA_Stop();
     uint8_t IdleRx_DMA(uint8_t *pData, uint16_t Size);
     uint8_t printf(const char *format, ...);
