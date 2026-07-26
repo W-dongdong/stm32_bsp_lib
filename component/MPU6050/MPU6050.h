@@ -1,19 +1,20 @@
 /**
   ******************************************************************************
   * @file    MPU6050.h
-  * @brief   STM32 MPU6050 Driver (C++ Version) - Header
+  * @brief   STM32 MPU6050 Driver (C++ Version) — Integrated Mahony AHRS
   ******************************************************************************
   */
 
 /*
  * File Name        : MPU6050.h
- * Description      : C++ MPU6050 driver class
- *                    - 6-axis IMU (3-axis Gyro + 3-axis Accel)
+ * Description      : C++ MPU6050 driver with built-in Mahony attitude estimation
+ *                    - 6-axis IMU (3-axis Gyro + 3-axis Accel) + Temperature
  *                    - I2C register read/write via I2CDevice
+ *                    - On-chip Mahony AHRS → Euler angles
  * Target Platform  : STM32F1/F4/F7 Series
- * Dependencies     : i2c_drv.h
+ * Dependencies     : i2c_drv.h, Mahony.h
  * Author           : WU Yandong(Mark)
- * Last Updated     : 2026-07-07
+ * Last Updated     : 2026-07-27
  *
  * Team Notes:
  * ATTENTION: Before you modify the code, make sure that you understand your code and modified function
@@ -29,7 +30,7 @@ extern "C" {
 /* Includes */
 #include "i2c_drv.h"
 
-/* MPU6050 Register Map */
+/* ========================== MPU6050 Register Map ========================== */
 #define     MPU6050_SMPLRT_DIV        0x19
 #define     MPU6050_CONFIG             0x1A
 #define     MPU6050_GYRO_CONFIG        0x1B
@@ -56,34 +57,113 @@ extern "C" {
 
 #define     MPU6050_ADDRESS            0xD0
 
+/* ======================== Clock Source Options ======================== */
+#define     MPU6050_CLK_INTERNAL       0x00
+#define     MPU6050_CLK_GYRO_X         0x01
+#define     MPU6050_CLK_GYRO_Y         0x02
+#define     MPU6050_CLK_GYRO_Z         0x03
+#define     MPU6050_CLK_EXT_32K        0x04
+#define     MPU6050_CLK_EXT_19M        0x05
+#define     MPU6050_CLK_STOP           0x07
+
+/* ======================== Gyroscope Range Options ======================== */
+#define     MPU6050_GYRO_250DEG        0x00
+#define     MPU6050_GYRO_500DEG        0x01
+#define     MPU6050_GYRO_1000DEG       0x02
+#define     MPU6050_GYRO_2000DEG       0x03
+
+/* ======================== Accelerometer Range Options ======================== */
+#define     MPU6050_ACCEL_2G           0x00
+#define     MPU6050_ACCEL_4G           0x01
+#define     MPU6050_ACCEL_8G           0x02
+#define     MPU6050_ACCEL_16G          0x03
+
+/* ======================== DLPF Bandwidth Options ======================== */
+#define     MPU6050_DLPF_260HZ         0x00
+#define     MPU6050_DLPF_184HZ         0x01
+#define     MPU6050_DLPF_94HZ          0x02
+#define     MPU6050_DLPF_44HZ          0x03
+#define     MPU6050_DLPF_21HZ          0x04
+#define     MPU6050_DLPF_10HZ          0x05
+#define     MPU6050_DLPF_5HZ           0x06
+
 #ifdef __cplusplus
 }
 #endif
 
 #ifdef __cplusplus
 
+#include "Mahony.h"
+
 /**
- * @brief  MPU6050 Sensor Class
- * @note   Create with I2CDevice pointer to select I2C bus.
- *         Example:
+ * @brief  MPU6050 Configuration Structure
+ * @note   Pass to MPU6050 constructor; all hardware init happens inside
+ */
+struct MPU6050Config {
+	uint8_t ClockSource;        // Clock source (MPU6050_CLK_xxx)
+	uint8_t DLPF;               // DLPF bandwidth (MPU6050_DLPF_xxx)
+	uint8_t GyroRange;          // Gyroscope full-scale (MPU6050_GYRO_xxx)
+	uint8_t AccelRange;         // Accelerometer full-scale (MPU6050_ACCEL_xxx)
+	uint8_t SampleRateDiv;      // Sample rate divider (0 ~ 255)
+	float   SampleFrq;          // IMU sample frequency in Hz (for Mahony)
+	float   Kp;                 // Mahony proportional gain
+	float   Ki;                 // Mahony integral gain
+};
+
+/**
+ * @brief  MPU6050 Sensor Class with integrated Mahony AHRS
+ * @note   Usage:
  *           I2CDevice i2c2(&hi2c2);
- *           MPU6050   imu(&i2c2);
- *           imu.Init();
- *           imu.GetData(&AccX, &AccY, &AccZ, &Temp, &GyroX, &GyroY, &GyroZ);
+ *           MPU6050Config cfg = { MPU6050_CLK_GYRO_X, MPU6050_DLPF_44HZ,
+ *                                  MPU6050_GYRO_2000DEG, MPU6050_ACCEL_16G,
+ *                                  9, 200.0f, 0.5f, 0.1f };
+ *           MPU6050 imu(&i2c2, cfg);
+ *           imu.GetData();  // reads sensors, runs Mahony, updates Euler angles
  */
 class MPU6050 {
 
+public:
+	/* Raw sensor readings (LSB) */
+	int16_t m_AccX, m_AccY, m_AccZ;
+	int16_t m_GyroX, m_GyroY, m_GyroZ;
+	int16_t m_Temp;
+
+	/* Euler angles in radians (updated by GetData) */
+	float m_Roll, m_Pitch, m_Yaw;
+
+	/* On-chip Mahony attitude estimator */
+	Mahony m_AHRS;
+
 private:
-    I2CDevice *m_i2c;
+	I2CDevice      *m_i2c;          // Pointer to I2C bus device
+	MPU6050Config   m_Config;       // Hardware configuration
+	float           m_GyroScale;    // Raw LSB → rad/s  conversion factor
+	float           m_AccelScale;   // Raw LSB → g      conversion factor
 
 public:
-    MPU6050(I2CDevice *i2c);
+	/**
+	 * @brief  Constructor — configures MPU6050 registers and initializes Mahony
+	 * @param  i2c:    pointer to I2CDevice (e.g. &i2c2)
+	 * @param  config: MPU6050 hardware & Mahony parameter configuration
+	 */
+	MPU6050(I2CDevice *i2c, const MPU6050Config &config);
 
-    uint8_t WriteReg(uint8_t RegAddress, uint8_t Data);
-    uint8_t ReadReg(uint8_t RegAddress);
-    void Init();
-    void GetData(int16_t *AccX, int16_t *AccY, int16_t *AccZ, int16_t *Temp,
-                 int16_t *GyroX, int16_t *GyroY, int16_t *GyroZ);
+	/**
+	 * @brief  Write a single byte to an MPU6050 register
+	 */
+	uint8_t WriteReg(uint8_t RegAddress, uint8_t Data);
+
+	/**
+	 * @brief  Read a single byte from an MPU6050 register
+	 */
+	uint8_t ReadReg(uint8_t RegAddress);
+
+	/**
+	 * @brief  Read all sensor data, run Mahony AHRS, update Euler angles
+	 * @note   Call at fixed intervals (configured by SampleFrq)
+	 *         Updates: m_AccX/Y/Z, m_GyroX/Y/Z, m_Temp, m_Roll, m_Pitch, m_Yaw
+	 */
+	void GetData();
 };
 
 #endif /* __cplusplus */
