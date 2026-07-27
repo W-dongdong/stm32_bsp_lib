@@ -44,7 +44,7 @@ class TIMDevice {
 public:
 
     TIM_HandleTypeDef *m_htim;
-    uint8_t   m_Flag;
+    volatile uint8_t   m_Flag;
 
     static TIMDevice *instances_[MAX_INSTANCES];
     static uint8_t    instance_count_;

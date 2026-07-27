@@ -47,11 +47,11 @@ class I2CDevice {
 public:
 
     I2C_HandleTypeDef *m_hi2c;
-    uint8_t   m_RxFlag;
+    volatile uint8_t   m_RxFlag;
 
+    static const uint8_t MAX_INSTANCES = 3;
     static I2CDevice *instances_[MAX_INSTANCES];
     static uint8_t    instance_count_;
-    static constexpr uint8_t MAX_INSTANCES = 3;
 
     I2CDevice(I2C_HandleTypeDef *hi2c);
     uint8_t IsDeviceReady(uint16_t DevAddress, uint32_t Trials, uint32_t Timeout);

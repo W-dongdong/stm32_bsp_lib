@@ -48,8 +48,8 @@ class USARTDevice {
 public:
 
     UART_HandleTypeDef *m_huart;
-    uint8_t   m_RxFlag;
-    uint16_t  m_RxLen;
+    volatile uint8_t   m_RxFlag;
+    volatile uint16_t  m_RxLen;
     uint8_t   m_TxBuf[128];
 
     static const uint8_t MAX_INSTANCES = 6;

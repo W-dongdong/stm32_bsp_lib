@@ -57,8 +57,8 @@ typedef struct {
 class CANDevice {
 public:
 
-    CanMsg    m_RxMsg;
-    uint8_t   m_RxFlag;
+    volatile CanMsg    m_RxMsg;
+    volatile uint8_t   m_RxFlag;
     uint8_t   m_bus_idx;
     CAN_HandleTypeDef *m_hcan;
 
