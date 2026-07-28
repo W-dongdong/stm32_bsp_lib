@@ -100,43 +100,37 @@ extern "C" {
  * @note   Pass to MPU6050 constructor; all hardware init happens inside
  */
 struct MPU6050Config {
-	uint8_t ClockSource;        // Clock source (MPU6050_CLK_xxx)
 	uint8_t DLPF;               // DLPF bandwidth (MPU6050_DLPF_xxx)
 	uint8_t GyroRange;          // Gyroscope full-scale (MPU6050_GYRO_xxx)
 	uint8_t AccelRange;         // Accelerometer full-scale (MPU6050_ACCEL_xxx)
 	uint8_t SampleRateDiv;      // Sample rate divider (0 ~ 255)
-	float   SampleFrq;          // IMU sample frequency in Hz (for Mahony)
 	float   Kp;                 // Mahony proportional gain
 	float   Ki;                 // Mahony integral gain
 };
 
 /**
  * @brief  MPU6050 Sensor Class with integrated Mahony AHRS
- * @note   Usage:
- *           I2CDevice i2c2(&hi2c2);
- *           MPU6050Config cfg = { MPU6050_CLK_GYRO_X, MPU6050_DLPF_44HZ,
- *                                  MPU6050_GYRO_2000DEG, MPU6050_ACCEL_16G,
- *                                  9, 200.0f, 0.5f, 0.1f };
- *           MPU6050 imu(&i2c2, cfg);
- *           imu.GetData();  // reads sensors, runs Mahony, updates Euler angles
  */
 class MPU6050 {
 
 public:
 	/* Raw sensor readings (LSB) */
-	int16_t m_AccX, m_AccY, m_AccZ;
-	int16_t m_GyroX, m_GyroY, m_GyroZ;
+	int16_t m_RawAccX, m_RawAccY, m_RawAccZ;
+	int16_t m_RawGyroX, m_RawGyroY, m_RawGyroZ;
 	int16_t m_Temp;
 
-	/* Euler angles in radians (updated by GetData) */
+	/* Euler angles */
 	float m_Roll, m_Pitch, m_Yaw;
+	float m_GyroX, m_GyroY, m_GyroZ;
+	float m_AccX, m_AccY, m_AccZ;
 
 	/* On-chip Mahony attitude estimator */
-	Mahony m_AHRS;
+	Mahony m_Mahony;
 
 private:
 	I2CDevice      *m_i2c;          // Pointer to I2C bus device
 	MPU6050Config   m_Config;       // Hardware configuration
+	float           m_OffsetGyroX, m_OffsetGyroY, m_OffsetGyroZ;  // Gyro zero-rate offset (LSB)
 	float           m_GyroScale;    // Raw LSB → rad/s  conversion factor
 	float           m_AccelScale;   // Raw LSB → g      conversion factor
 
@@ -159,11 +153,18 @@ public:
 	uint8_t ReadReg(uint8_t RegAddress);
 
 	/**
-	 * @brief  Read all sensor data, run Mahony AHRS, update Euler angles
+	 * @brief  Read all sensor data, run Mahony AHRS, update Euler angles(degree)
 	 * @note   Call at fixed intervals (configured by SampleFrq)
 	 *         Updates: m_AccX/Y/Z, m_GyroX/Y/Z, m_Temp, m_Roll, m_Pitch, m_Yaw
 	 */
-	void GetData();
+	uint8_t GetData();
+
+	/**
+	 * @brief  Gyroscope zero-rate offset calibration (IMU must be stationary)
+	 * @note   Reads 1000 samples, averages raw LSB, stores in m_OffsetGyroX/Y/Z
+	 * @retval 1 on success, 0 if too many I2C failures
+	 */
+	uint8_t CalibrateGyro();
 };
 
 #endif /* __cplusplus */
